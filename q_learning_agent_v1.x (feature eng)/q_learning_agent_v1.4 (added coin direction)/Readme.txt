@@ -1,0 +1,1 @@
+Replaced distance to nearest coin with a simple feature that tells the direction to the nearest coin.

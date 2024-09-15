@@ -1,0 +1,1 @@
+Added enemy direction rewards
