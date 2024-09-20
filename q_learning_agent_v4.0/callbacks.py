@@ -8,6 +8,7 @@ from collections import deque
 from functools import lru_cache, wraps
 
 
+
 ACTIONS = ['UP', 'RIGHT', 'DOWN', 'LEFT', 'WAIT', 'BOMB']
 
 
@@ -26,15 +27,17 @@ def setup(self):
     :param self: This object is passed to all callbacks and you can set arbitrary values.
     """
 
-    self.current_epsilon = 1.0
+    self.current_epsilon = 0.01
 
-    if self.train or not os.path.isfile("my-saved-model.pt"):
-        self.logger.info("Setting up model from scratch.")
-        self.q_table = defaultdict(lambda: defaultdict(float))
-    else:
-        self.logger.info("Loading model from saved state.")
+    # Check if we're continuing from a saved state
+    if os.path.isfile("my-saved-model.pt"):
+        print("Loading model from saved state.")
         with open("my-saved-model.pt", "rb") as file:
-            self.q_table = pickle.load(file)
+            self.q_table = defaultdict(lambda: defaultdict(float), pickle.load(file))
+    else:
+        print("Setting up model from scratch.")
+        self.q_table = defaultdict(lambda: defaultdict(float))
+
 
     self.steps_since_bomb = 6
     
@@ -100,6 +103,8 @@ def state_to_features(game_state: dict) -> tuple:
     return cached_state_to_features(hashed_state)
 
 def original_state_to_features(game_state: dict) -> np.array:
+    # This is your original state_to_features function
+    # Copy the entire body of your current state_to_features function here
     
     if game_state is None:
         return None
@@ -132,7 +137,22 @@ def original_state_to_features(game_state: dict) -> np.array:
         target_type, enemy_direction, game_state['self'][2]
     ))
 
+    direction_dic ={
+        0: 'wait',
+        1: 'Up',
+        2: 'Right',
+        3: 'Down', 
+        4: 'Left',
+    }
+
+    bomb_dic = {
+        0: "Don't bomb",
+        1: "Bomb",
+    }
+
+    print(f"[({direction_dic[features[5][0]]}, {features[5][1]}), {direction_dic[features[6]]}, ({bomb_dic[features[7][0]]}, {features[7][1]}])")
     return tuple(features)
+
 
 
 def get_tile_value(x, y, field, bombs, explosions, others):
@@ -208,32 +228,36 @@ def is_optimal_bomb_position(position, field, others, bombs, tracked_enemy, get_
 
 
 def get_enemy_direction(position, others, field, coins, crates, bombs, explosion_map):
-        if not others or (not coins and not crates):
-            return 0
-        
-        nearest_enemies = [enemy for enemy in others if manhattan_distance(position, enemy[3]) <= 5]
-        if not nearest_enemies:
-            return 0
-        
-        highest_scoring_enemy = max(nearest_enemies, key=lambda x: x[1])
-        enemy_pos = highest_scoring_enemy[3]
-        
-        # Check if we're adjacent to a safe tile
-        adjacent_safe_tile = any(
-            is_valid_tile(field, position[0] + dx, position[1] + dy) and
-            not is_in_danger((position[0] + dx, position[1] + dy), bombs, field)
-            for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]
-        )
-        
-        if adjacent_safe_tile:
-            # If we're adjacent to a safe tile, we can pursue the enemy even if there's a bomb
-            path = a_star(field, position, enemy_pos, [], others, explosion_map)  # Ignore bombs in pathfinding
-        else:
-            path = a_star(field, position, enemy_pos, bombs, others, explosion_map)
-        
-        if path and len(path) > 1:
-            return get_direction_from_path(position, path[1])
+    if not others or (not coins and not crates):
         return 0
+
+    # Check if we're adjacent to a safe tile
+    adjacent_safe_tile = any(
+        is_valid_tile(field, position[0] + dx, position[1] + dy) and
+        not is_in_danger((position[0] + dx, position[1] + dy), bombs, field)
+        for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]
+    )
+
+    nearest_enemies = []
+    for enemy in others:
+        if adjacent_safe_tile:
+            path = a_star(field, position, enemy[3], [], others, explosion_map)
+            if path and len(path) <= 7:  # Path length of 6 or less (5 steps away + current position)
+                nearest_enemies.append((enemy, path))
+        else:
+            path = a_star(field, position, enemy[3], bombs, others, explosion_map)
+            if path and len(path) <= 7:  # Path length of 6 or less (5 steps away + current position)
+                nearest_enemies.append((enemy, path))
+    
+    if not nearest_enemies:
+        return 0
+    
+    # Choose the highest scoring enemy among the nearest ones
+    highest_scoring_enemy, path = max(nearest_enemies, key=lambda x: x[0][1])
+    
+    if len(path) > 1:
+        return get_direction_from_path(position, path[1])
+    return 0
 
 def get_direction(game_state):
         field = game_state['field']
@@ -269,14 +293,13 @@ def get_direction(game_state):
         
         # Priority 1: Coins with unobstructed path
         for coin in coins:
-            path = a_star(field, position, coin, bombs, others, explosion_map)
+            path = a_star_to_coin(field, position, coin, bombs, others)
             if path and len(path) > 1:
                 return get_direction_from_path(position, path[1]), 'coin'
         
 
         # Priority 2: Crates
-        MAX_BOMB_DISTANCE = 5  # Maximum distance to consider for bomb placement
-
+        MAX_BOMB_DISTANCE = 6  # Maximum distance to consider for bomb placement
         crate_positions = [(x, y) for x in range(field.shape[0]) for y in range(field.shape[1]) if field[x, y] == 1]
         if crate_positions:
             # Find all valid positions to place bombs (empty tiles) within MAX_BOMB_DISTANCE
@@ -291,7 +314,7 @@ def get_direction(game_state):
             for bomb_pos in bomb_positions:
                 crates_destroyed = count_destroyable_crates(field, bomb_pos)
                 distance = manhattan_distance(position, bomb_pos)
-                score = crates_destroyed * 5 - distance * 2  # Prioritize crate destruction over distance
+                score = crates_destroyed * 5 - distance * 4  # Prioritize crate destruction over distance
                 scored_positions.append((score, bomb_pos))
             
             # Sort positions by score
@@ -328,7 +351,7 @@ def get_direction(game_state):
                 if valid_directions:
                     best_direction = max(valid_directions,
                                         key=lambda d: sum(manhattan_distance((position[0]+d[0], position[1]+d[1]), enemy[3]) for enemy in others))
-                    return get_direction_from_path(position, (position[0]+best_direction[0], position[1]+best_direction[1])), None
+                    return get_direction_from_path(position, (position[0]+best_direction[0], position[1]+best_direction[1])), 'dodging_enemy'
         
         # If we reach here, there are no valid moves, so we wait
         return 0, 'wait'  # WAIT
@@ -631,3 +654,57 @@ def count_destroyable_crates(field, position):
             if field[nx, ny] == 1:  # Count crates
                 count += 1
     return count
+
+def a_star_to_coin(field, start, goal, bombs, others):
+    def heuristic(a, b):
+        return manhattan_distance(a, b)
+    
+    def is_valid(x, y):
+        return 0 <= x < field.shape[0] and 0 <= y < field.shape[1] and field[x, y] != -1
+
+    def get_neighbors(pos):
+        x, y = pos
+        neighbors = []
+        for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
+            next_x, next_y = x + dx, y + dy
+            if is_valid(next_x, next_y) and field[next_x, next_y] != 1 and \
+               not is_in_danger((next_x, next_y), bombs, field) and \
+               ((next_x, next_y) == goal or not any(o[3] == (next_x, next_y) for o in others)):
+                neighbors.append((next_x, next_y))
+        return neighbors
+
+    closed_set = set()
+    open_set = [(0, start)]
+    came_from = {}
+    g_score = {start: 0}
+    f_score = {start: heuristic(start, goal)}
+
+    while open_set:
+        current = heapq.heappop(open_set)[1]
+
+        if current == goal:
+            path = []
+            while current in came_from:
+                path.append(current)
+                current = came_from[current]
+            path.append(start)
+            return path[::-1]
+
+        closed_set.add(current)
+
+        for neighbor in get_neighbors(current):
+            if neighbor in closed_set:
+                continue
+
+            tentative_g_score = g_score[current] + 1
+
+            if neighbor not in [i[1] for i in open_set]:
+                heapq.heappush(open_set, (f_score.get(neighbor, float('inf')), neighbor))
+            elif tentative_g_score >= g_score.get(neighbor, float('inf')):
+                continue
+
+            came_from[neighbor] = current
+            g_score[neighbor] = tentative_g_score
+            f_score[neighbor] = g_score[neighbor] + heuristic(neighbor, goal)
+
+    return None  # No path found

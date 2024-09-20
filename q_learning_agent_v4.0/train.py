@@ -14,7 +14,7 @@ Transition = namedtuple('Transition',
 
 # Hyper parameters -- DO modify
 TRANSITION_HISTORY_SIZE = 100000  # keep only ... last transitions
-RECORD_ENEMY_TRANSITIONS = 1.0  # record enemy transitions with probability ...
+RECORD_ENEMY_TRANSITIONS = 0.01  # record enemy transitions with probability ...
 N_TRAINING_EPSD = 800000
 BATCH_SIZE = 32  # mini-batch size for training
 TRAIN_FREQ = 4
@@ -31,6 +31,15 @@ def setup_training(self):
 
     :param self: This object is passed to all callbacks and you can set arbitrary values.
     """
+
+    # Check if we're continuing from a saved state
+    if any(self.q_table.values()):
+        print("Continuing training from saved state.")
+    else:
+        print("Starting training from scratch.")
+
+
+
     # Example: Setup an array that will note transition tuples
     # (s, a, r, s')
     self.transitions = deque(maxlen=TRANSITION_HISTORY_SIZE)
@@ -44,7 +53,9 @@ def setup_training(self):
     self.random_value = 0
     self.current_step = 0
     self.steps_since_train = 0
-    
+    self.epsilon = 1.0 if not any(self.q_table.values()) else 0.001
+
+
     def train_step():
         if len(self.transitions) < BATCH_SIZE:
             return
@@ -97,49 +108,8 @@ def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_
     # Get the actual direction the agent moved
     old_position = old_game_state['self'][3]
     new_position = new_game_state['self'][3]
-    actual_direction = get_direction_from_path(old_position, new_position)
 
-    # Custom rewards
-    custom_events = []
-
-    # Helper function to check if the agent moved in the recommended direction
-    def moved_as_recommended(recommended_direction):
-        return actual_direction == recommended_direction
-
-    # Reward for moving towards/away from coin or crate
-    if old_features[5][1] in ['coin', 'crate']:
-        recommended_direction = old_features[5][0]
-        if moved_as_recommended(recommended_direction):
-            custom_events.append(f"MOVED_TOWARDS_{old_features[5][1].upper()}")
-        else:
-            custom_events.append(f"MOVED_AWAY_FROM_{old_features[5][1].upper()}")
-
-    # Reward for moving towards/away from enemy
-    enemy_direction = old_features[6]
-    if enemy_direction != 0:
-        if moved_as_recommended(enemy_direction):
-            custom_events.append("MOVED_TOWARDS_ENEMY")
-        else:
-            custom_events.append("MOVED_AWAY_FROM_ENEMY")
-
-    # Penalty for not moving towards safety when in danger
-    if old_features[5][1] == 'running_from_danger':
-        recommended_direction = old_features[5][0]
-        if not moved_as_recommended(recommended_direction):
-            custom_events.append("IGNORED_SAFETY")
-
-    # Penalty for unnecessary waiting
-    if self_action == 'WAIT' and old_features[5][1] != 'wait':
-        custom_events.append("UNNECESSARY_WAIT")
-
-    # Rewards/Penalties for bomb placement
-    if self_action == 'BOMB':
-        if old_features[7][0] == 0:  # Bomb was not optimal
-            custom_events.append("UNNECESSARY_BOMB")
-        elif old_features[7][1] in ['crate_bomb', 'enemy_bomb']:
-            custom_events.append("GOOD_BOMB_PLACEMENT")
-        elif old_features[7][1] == 'kill_bomb':
-            custom_events.append("EXCELLENT_BOMB_PLACEMENT")
+    custom_events = calculate_rewards(old_features, new_features, self_action, old_position, new_position)
 
     # Add custom events to the events list
     events.extend(custom_events)
@@ -169,6 +139,16 @@ def enemy_game_events_occurred(self, enemy_name: str, old_enemy_game_state: dict
     if self.random_value < self.prob_record:
         old_features = state_to_features(old_enemy_game_state)
         new_features = state_to_features(new_enemy_game_state)
+        print("ENEMY TRANSITION!")
+        # Get the actual direction the agent moved
+        old_position = old_enemy_game_state['self'][3]
+        new_position = new_enemy_game_state['self'][3]
+        
+        custom_events = calculate_rewards(old_features, new_features, enemy_action, old_position, new_position)
+
+        # Add custom events to the events list
+        enemy_events.extend(custom_events)
+
         reward = reward_from_events(self, enemy_events)
         
         # Store enemy transition
@@ -205,7 +185,8 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
     self.prob_record = max(0.05, RECORD_ENEMY_TRANSITIONS * (1 - last_game_state['round'] / N_TRAINING_EPSD))
 
     # Update epsilon 
-    self.current_epsilon = max(0.025, min(1, 1.0 - last_game_state['round'] / N_TRAINING_EPSD))
+    #self.current_epsilon = max(0.025, min(1, 1.0 - last_game_state['round'] / N_TRAINING_EPSD))
+    print(f'current_epsilon: {self.current_epsilon}')
 
     # Determine if the agent won
     won = e.SURVIVED_ROUND in events
@@ -251,25 +232,88 @@ def reward_from_events(self, events: List[str]) -> int:
         e.GOT_KILLED: -400,
         e.KILLED_SELF: -400,
         e.INVALID_ACTION: -50,
-        "MOVED_TOWARDS_COIN": 40,
-        "MOVED_AWAY_FROM_COIN": -50,
+        "MOVED_TOWARDS_COIN": 20,
+        "MOVED_AWAY_FROM_COIN": -15,
         "MOVED_TOWARDS_CRATE": 4,
         "MOVED_AWAY_FROM_CRATE": -4,
-        "MOVED_TOWARDS_ENEMY": 20,
-        "MOVED_AWAY_FROM_ENEMY": -15,
+        "CRATE_BOMB_NOT_PLACED": -8,
+        "MOVED_TOWARDS_ENEMY": 40,
+        "MOVED_AWAY_FROM_ENEMY": -50,
         "IGNORED_SAFETY": -100,
         "UNNECESSARY_WAIT": -15,
         "UNNECESSARY_BOMB": -50,
         "GOOD_BOMB_PLACEMENT": 50,
         "EXCELLENT_BOMB_PLACEMENT": 250,
+        "FOLLOWED_ENDGAME_DIRECTIONS": 10,
+        "DID_NOT_FOLLOW_ENDGAME_DIRECTIONS": -15,
     }
+
     reward_sum = 0
+    
     for event in events:
-        if event in game_rewards:
-            reward_sum += game_rewards[event]
+        if event in game_rewards.keys():
+            print(f"event {event}, reward: {game_rewards[event]}")
+            if event in game_rewards:
+                reward_sum += game_rewards[event]
 
-
-    self.logger.info(f"Awarded {reward_sum} for events {', '.join(events)}")
+    print("----------------")
+    #self.logger.info(f"Awarded {reward_sum} for events {', '.join(events)}")
     return reward_sum
 
 
+def calculate_rewards(old_features, new_features, action, old_position, new_position):
+    custom_events = []
+    actual_direction = get_direction_from_path(old_position, new_position)
+
+    def moved_as_recommended(recommended_direction):
+        return actual_direction == recommended_direction
+
+    # Reward for moving towards/away from coin or crate
+    if old_features[5][1] in ['coin', 'crate']:
+        recommended_direction = old_features[5][0]
+        if moved_as_recommended(recommended_direction):
+            custom_events.append(f"MOVED_TOWARDS_{old_features[5][1].upper()}")
+        else:
+            custom_events.append(f"MOVED_AWAY_FROM_{old_features[5][1].upper()}")
+
+    # Rewards for following endgame_directions
+    if old_features[5][1] in ['chasing_enemy', 'dodging_enemy']:
+        recommended_direction = old_features[5][0]
+        if moved_as_recommended(recommended_direction):
+            custom_events.append(f"FOLLOWED_ENDGAME_DIRECTIONS")
+        else:
+            custom_events.append(f"DID_NOT_FOLLOW_ENDGAME_DIRECTIONS")
+
+    # Reward for moving towards/away from enemy
+    enemy_direction = old_features[6]
+    if enemy_direction != 0:
+        if moved_as_recommended(enemy_direction):
+            custom_events.append("MOVED_TOWARDS_ENEMY")
+        else:
+            custom_events.append("MOVED_AWAY_FROM_ENEMY")
+
+    # Penalty for not moving towards safety when in danger
+    if old_features[5][1] == 'running_from_danger':
+        recommended_direction = old_features[5][0]
+        if not moved_as_recommended(recommended_direction):
+            custom_events.append("IGNORED_SAFETY")
+
+    # Penalty for unnecessary waiting
+    if action == 'WAIT' and old_features[5][1] != 'wait':
+        custom_events.append("UNNECESSARY_WAIT")
+
+    if old_features[5][1] == 'reached_crate' and action != 'BOMB' and enemy_direction == 0:
+        custom_events.append("CRATE_BOMB_NOT_PLACED")
+
+    
+
+    # Rewards/Penalties for bomb placement
+    if action == 'BOMB':
+        if old_features[7][0] == 0:  # Bomb was not optimal
+            custom_events.append("UNNECESSARY_BOMB")
+        elif old_features[7][1] in ['crate_bomb', 'enemy_bomb']:
+            custom_events.append("GOOD_BOMB_PLACEMENT")
+        elif old_features[7][1] == 'kill_bomb':
+            custom_events.append("EXCELLENT_BOMB_PLACEMENT")
+
+    return custom_events
