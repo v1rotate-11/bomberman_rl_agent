@@ -14,8 +14,8 @@ Transition = namedtuple('Transition',
 
 # Hyper parameters -- DO modify
 TRANSITION_HISTORY_SIZE = 100000  # keep only ... last transitions
-RECORD_ENEMY_TRANSITIONS = 0.01  # record enemy transitions with probability ...
-N_TRAINING_EPSD = 800000
+RECORD_ENEMY_TRANSITIONS = 1.0  # record enemy transitions with probability ...
+N_TRAINING_EPSD = 1000000
 BATCH_SIZE = 32  # mini-batch size for training
 TRAIN_FREQ = 4
 
@@ -185,9 +185,8 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
     self.prob_record = max(0.05, RECORD_ENEMY_TRANSITIONS * (1 - last_game_state['round'] / N_TRAINING_EPSD))
 
     # Update epsilon 
-    #self.current_epsilon = max(0.025, min(1, 1.0 - last_game_state['round'] / N_TRAINING_EPSD))
-    print(f'current_epsilon: {self.current_epsilon}')
-
+    self.current_epsilon = max(0.025, min(1, 1.0 - last_game_state['round'] / N_TRAINING_EPSD))
+    
     # Determine if the agent won
     won = e.SURVIVED_ROUND in events
 
@@ -212,7 +211,7 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
     self.current_step = 0
     self.steps_since_train = 0
 
-    if last_game_state['round'] % 50000 == 0:
+    if last_game_state['round'] == N_TRAINING_EPSD:
         self.tracker.save_current_session("q_learning_agent_v4.0")
 
     # Store the model
@@ -251,13 +250,10 @@ def reward_from_events(self, events: List[str]) -> int:
     reward_sum = 0
     
     for event in events:
-        if event in game_rewards.keys():
-            print(f"event {event}, reward: {game_rewards[event]}")
-            if event in game_rewards:
-                reward_sum += game_rewards[event]
+        if event in game_rewards:
+            reward_sum += game_rewards[event]
 
-    print("----------------")
-    #self.logger.info(f"Awarded {reward_sum} for events {', '.join(events)}")
+
     return reward_sum
 
 
@@ -304,8 +300,6 @@ def calculate_rewards(old_features, new_features, action, old_position, new_posi
 
     if old_features[5][1] == 'reached_crate' and action != 'BOMB' and enemy_direction == 0:
         custom_events.append("CRATE_BOMB_NOT_PLACED")
-
-    
 
     # Rewards/Penalties for bomb placement
     if action == 'BOMB':

@@ -5,8 +5,8 @@ from fallbacks import pygame
 
 # Game properties
 # board size (a smaller board may be useful at the beginning)
-COLS = 13
-ROWS = 13
+COLS = 17
+ROWS = 17
 SCENARIOS = {
     # modes useful for agent development
 	"training": {

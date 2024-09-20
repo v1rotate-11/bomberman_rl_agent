@@ -27,7 +27,7 @@ def setup(self):
     :param self: This object is passed to all callbacks and you can set arbitrary values.
     """
 
-    self.current_epsilon = 0.01
+    self.current_epsilon = 1.0
 
     # Check if we're continuing from a saved state
     if os.path.isfile("my-saved-model.pt"):
@@ -137,20 +137,7 @@ def original_state_to_features(game_state: dict) -> np.array:
         target_type, enemy_direction, game_state['self'][2]
     ))
 
-    direction_dic ={
-        0: 'wait',
-        1: 'Up',
-        2: 'Right',
-        3: 'Down', 
-        4: 'Left',
-    }
 
-    bomb_dic = {
-        0: "Don't bomb",
-        1: "Bomb",
-    }
-
-    print(f"[({direction_dic[features[5][0]]}, {features[5][1]}), {direction_dic[features[6]]}, ({bomb_dic[features[7][0]]}, {features[7][1]}])")
     return tuple(features)
 
 
@@ -312,7 +299,8 @@ def get_direction(game_state):
             # Score each position based on destroyable crates and distance
             scored_positions = []
             for bomb_pos in bomb_positions:
-                crates_destroyed = count_destroyable_crates(field, bomb_pos)
+                field_tuple = tuple(tuple(row) for row in field)
+                crates_destroyed = count_destroyable_crates(field_tuple, bomb_pos)
                 distance = manhattan_distance(position, bomb_pos)
                 score = crates_destroyed * 5 - distance * 4  # Prioritize crate destruction over distance
                 scored_positions.append((score, bomb_pos))
@@ -641,7 +629,9 @@ def bfs_free_tiles(field, start_x, start_y, others, bombs, self_position):
     return free_tiles
 
 
-def count_destroyable_crates(field, position):
+@lru_cache(maxsize=1000)
+def count_destroyable_crates(field_tuple, position):
+    field = np.array(field_tuple)  # Convert back to numpy array
     x, y = position
     count = 0
     for dx, dy in [(1,0), (-1,0), (0,1), (0,-1)]:
