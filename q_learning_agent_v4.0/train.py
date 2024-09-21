@@ -139,7 +139,7 @@ def enemy_game_events_occurred(self, enemy_name: str, old_enemy_game_state: dict
     if self.random_value < self.prob_record:
         old_features = state_to_features(old_enemy_game_state)
         new_features = state_to_features(new_enemy_game_state)
-        print("ENEMY TRANSITION!")
+
         # Get the actual direction the agent moved
         old_position = old_enemy_game_state['self'][3]
         new_position = new_enemy_game_state['self'][3]
@@ -241,8 +241,9 @@ def reward_from_events(self, events: List[str]) -> int:
         "IGNORED_SAFETY": -100,
         "UNNECESSARY_WAIT": -15,
         "UNNECESSARY_BOMB": -50,
-        "GOOD_BOMB_PLACEMENT": 50,
+        "GOOD_BOMB_PLACEMENT": 40,
         "EXCELLENT_BOMB_PLACEMENT": 250,
+        "DID_NOT_PLACE_KILL_BOMB": -250,
         "FOLLOWED_ENDGAME_DIRECTIONS": 10,
         "DID_NOT_FOLLOW_ENDGAME_DIRECTIONS": -15,
     }
@@ -300,6 +301,10 @@ def calculate_rewards(old_features, new_features, action, old_position, new_posi
 
     if old_features[5][1] == 'reached_crate' and action != 'BOMB' and enemy_direction == 0:
         custom_events.append("CRATE_BOMB_NOT_PLACED")
+
+    # Penalty for not placing 'kill_bomb'
+    if old_features[7][1] == 'kill_bomb' and action != 'BOMB':
+        custom_events.append("DID_NOT_PLACE_KILL_BOMB")
 
     # Rewards/Penalties for bomb placement
     if action == 'BOMB':

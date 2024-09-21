@@ -83,12 +83,12 @@ def cached_state_to_features(hashed_state):
     field_bytes, bombs, coins, self_info, others, explosion_map_bytes = hashed_state
     
     game_state = {
-        'field': np.frombuffer(field_bytes, dtype=int).reshape((13, 13)),
+        'field': np.frombuffer(field_bytes, dtype=int).reshape((17, 17)),
         'bombs': [((x, y), t) for x, y, t in bombs],
         'coins': list(coins),
         'self': self_info,  # Use the complete self tuple
         'others': [tuple(other) for other in others],
-        'explosion_map': np.frombuffer(explosion_map_bytes, dtype=int).reshape((13, 13))
+        'explosion_map': np.frombuffer(explosion_map_bytes, dtype=int).reshape((17, 17))
     }
     
     return original_state_to_features(game_state)
@@ -279,8 +279,9 @@ def get_direction(game_state):
             return 0, 'wait'  # 0 represents "WAIT"
         
         # Priority 1: Coins with unobstructed path
-        for coin in coins:
-            path = a_star_to_coin(field, position, coin, bombs, others)
+        reachable_coin = find_reachable_coin(position, coins, others, field, bombs)
+        if reachable_coin:
+            path = a_star_to_coin(field, position, reachable_coin, bombs, others)
             if path and len(path) > 1:
                 return get_direction_from_path(position, path[1]), 'coin'
         
@@ -302,7 +303,7 @@ def get_direction(game_state):
                 field_tuple = tuple(tuple(row) for row in field)
                 crates_destroyed = count_destroyable_crates(field_tuple, bomb_pos)
                 distance = manhattan_distance(position, bomb_pos)
-                score = crates_destroyed * 5 - distance * 4  # Prioritize crate destruction over distance
+                score = crates_destroyed * 5 - distance * 2  # Prioritize crate destruction over distance
                 scored_positions.append((score, bomb_pos))
             
             # Sort positions by score
@@ -346,7 +347,7 @@ def get_direction(game_state):
 
 
 
-@lru_cache(maxsize=1000)
+@lru_cache(maxsize=2000)
 def manhattan_distance(pos1, pos2):
     return abs(pos1[0] - pos2[0]) + abs(pos1[1] - pos2[1])
 
@@ -399,7 +400,7 @@ def is_in_danger(position, bombs, field):
                     return True
     return False
 
-def find_prioritized_safe_tiles(field, bombs, explosion_map, others, agent_pos, coins, max_coin_distance=11):
+def find_prioritized_safe_tiles(field, bombs, explosion_map, others, agent_pos, coins, max_coin_distance=8):
     safe_tiles = []
     safe_tiles_with_coins = []
     
@@ -629,7 +630,7 @@ def bfs_free_tiles(field, start_x, start_y, others, bombs, self_position):
     return free_tiles
 
 
-@lru_cache(maxsize=1000)
+@lru_cache(maxsize=5000)
 def count_destroyable_crates(field_tuple, position):
     field = np.array(field_tuple)  # Convert back to numpy array
     x, y = position
@@ -698,3 +699,28 @@ def a_star_to_coin(field, start, goal, bombs, others):
             f_score[neighbor] = g_score[neighbor] + heuristic(neighbor, goal)
 
     return None  # No path found
+
+def find_reachable_coin(position, coins, others, field, bombs):
+    # Sort coins by Manhattan distance
+    sorted_coins = sorted(coins, key=lambda c: manhattan_distance(position, c))
+    
+    for coin in sorted_coins:
+        our_path = a_star_to_coin(field, position, coin, bombs, others)
+        if not our_path:
+            continue  # If we can't reach the coin, move to the next one
+        
+        our_distance = len(our_path) - 1
+        
+        enemy_can_reach_first = False
+        for enemy in others:
+            enemy_path = a_star_to_coin(field, enemy[3], coin, bombs, others)
+            enemy_distance = len(enemy_path) - 1 if enemy_path else float('inf')
+            if enemy_distance < our_distance:
+                enemy_can_reach_first = True
+                break
+        
+        if not enemy_can_reach_first:
+            print(f"chosen coin: {coin}")
+            return coin
+    
+    return None
