@@ -43,15 +43,10 @@ def setup_training(self):
     # Example: Setup an array that will note transition tuples
     # (s, a, r, s')
     self.transitions = deque(maxlen=TRANSITION_HISTORY_SIZE)
-    self.enemy_decay_rate = 0.9999  # decay rate for enemy transition recording probability
-    self.current_enemy_prob = RECORD_ENEMY_TRANSITIONS
     self.episode_reward = 0
     self.survival_time = 0
     self.coins_collected = 0
     self.tracker = MultiSessionPerformanceTracker()
-    self.prob_record = RECORD_ENEMY_TRANSITIONS
-    self.random_value = 0
-    self.current_step = 0
     self.steps_since_train = 0
     self.epsilon = 1.0 if not any(self.q_table.values()) else 0.001
 
@@ -97,10 +92,9 @@ def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_
     :param new_game_state: The state the agent is in now.
     :param events: The events that occurred when going from  `old_game_state` to `new_game_state`
     """
-    if self.current_step != new_game_state['step']:
-        self.current_step = new_game_state['step']
-        self.random_value = random.random()
-        self.steps_since_train += 1
+    
+    self.current_step = new_game_state['step']
+    self.steps_since_train += 1
 
     old_features = tuple(state_to_features(old_game_state))
     new_features = tuple(state_to_features(new_game_state))
@@ -117,8 +111,7 @@ def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_
     reward = reward_from_events(self, events)
 
     # Store transition
-    if self.random_value >= self.prob_record:
-        self.transitions.append(Transition(old_features, self_action, new_features, reward))
+    self.transitions.append(Transition(old_features, self_action, new_features, reward))
 
     # Update episode statistics
     self.episode_reward += reward
@@ -130,30 +123,6 @@ def game_events_occurred(self, old_game_state: dict, self_action: str, new_game_
     if self.steps_since_train >= TRAIN_FREQ:
         self.train_step()
         self.steps_since_train = 0
-    
-def enemy_game_events_occurred(self, enemy_name: str, old_enemy_game_state: dict, enemy_action: str, new_enemy_game_state: dict, enemy_events: List[str]):    
-    if self.current_step != new_enemy_game_state['step']:
-        self.current_step = new_enemy_game_state['step']
-        self.random_value = random.random()
-
-    if self.random_value < self.prob_record:
-        old_features = state_to_features(old_enemy_game_state)
-        new_features = state_to_features(new_enemy_game_state)
-
-        # Get the actual direction the agent moved
-        old_position = old_enemy_game_state['self'][3]
-        new_position = new_enemy_game_state['self'][3]
-        
-        custom_events = calculate_rewards(old_features, new_features, enemy_action, old_position, new_position)
-
-        # Add custom events to the events list
-        enemy_events.extend(custom_events)
-
-        reward = reward_from_events(self, enemy_events)
-        
-        # Store enemy transition
-        self.transitions.append(Transition(old_features, enemy_action, new_features, reward))
-
 
 def end_of_round(self, last_game_state: dict, last_action: str, events: List[str]):
     """
@@ -180,9 +149,6 @@ def end_of_round(self, last_game_state: dict, last_action: str, events: List[str
 
     # Add this last transition to the replay buffer
     self.transitions.append(Transition(last_features, last_action, None, reward))
-
-    # Update prob_record for the next episode
-    self.prob_record = max(0.05, RECORD_ENEMY_TRANSITIONS * (1 - last_game_state['round'] / N_TRAINING_EPSD))
 
     # Update epsilon 
     self.current_epsilon = max(0.025, min(1, 1.0 - last_game_state['round'] / N_TRAINING_EPSD))
