@@ -513,7 +513,8 @@ def a_star(field, start, goal, bombs, others, explosion_map):
         return cross * 0.001  # Small factor to break ties
 
     closed_set = set()
-    open_set = [(0, start)]
+    open_set = []
+    heapq.heappush(open_set, (0, start))
     came_from = {}
     g_score = {start: 0}
     f_score = {start: heuristic(start, goal)}
