@@ -284,43 +284,47 @@ def get_direction(game_state):
             path = a_star_to_coin(field, position, reachable_coin, bombs, others)
             if path and len(path) > 1:
                 return get_direction_from_path(position, path[1]), 'coin'
-        
+            
+        # Count the number of crates
+        crate_count = sum(1 for x in range(field.shape[0]) for y in range(field.shape[1]) if field[x, y] == 1)
 
-        # Priority 2: Crates
-        MAX_BOMB_DISTANCE = 6  # Maximum distance to consider for bomb placement
-        crate_positions = [(x, y) for x in range(field.shape[0]) for y in range(field.shape[1]) if field[x, y] == 1]
-        if crate_positions:
-            # Find all valid positions to place bombs (empty tiles) within MAX_BOMB_DISTANCE
-            bomb_positions = [(x, y) for x in range(field.shape[0]) for y in range(field.shape[1]) 
-                            if field[x, y] == 0 and 
-                                not any(b[0] == (x,y) for b in bombs) and
-                                manhattan_distance(position, (x,y)) <= MAX_BOMB_DISTANCE and 
-                                not ((x == 1 or x == field.shape[0] - 2) and (y == 1 or y == field.shape[1] - 2))]
-                                
-            # Score each position based on destroyable crates and distance
-            scored_positions = []
-            for bomb_pos in bomb_positions:
-                field_tuple = tuple(tuple(row) for row in field)
-                crates_destroyed = count_destroyable_crates(field_tuple, bomb_pos)
-                distance = manhattan_distance(position, bomb_pos)
-                score = crates_destroyed * 5 - distance * 2  # Prioritize crate destruction over distance
-                scored_positions.append((score, bomb_pos))
-            
-            # Sort positions by score
-            scored_positions.sort(reverse=True)
-            
-            # Try to find a path to the best positions
-            for _, bomb_pos in scored_positions[:5]:  # Check the 5 best positions
-                if manhattan_distance(position, bomb_pos) == 0:
-                    # We're already at the optimal position, point to the nearest crate
-                    for dx, dy in [(1,0), (-1,0), (0,1), (0,-1)]:
-                        nx, ny = bomb_pos[0] + dx, bomb_pos[1] + dy
-                        if 0 <= nx < field.shape[0] and 0 <= ny < field.shape[1] and field[nx, ny] == 1:
-                            return get_direction_from_path(position, (nx, ny)), 'reached_crate'
-                else:
-                    path = a_star(field, position, bomb_pos, bombs, others, explosion_map)
-                    if path and len(path) > 1:
-                        return get_direction_from_path(position, path[1]), 'crate'
+        # If there are 10 or more crates, proceed with Priority 2
+        if crate_count >= 10:
+            # Priority 2: Crates
+            MAX_BOMB_DISTANCE = 6  # Maximum distance to consider for bomb placement
+            crate_positions = [(x, y) for x in range(field.shape[0]) for y in range(field.shape[1]) if field[x, y] == 1]
+            if crate_positions:
+                # Find all valid positions to place bombs (empty tiles) within MAX_BOMB_DISTANCE
+                bomb_positions = [(x, y) for x in range(field.shape[0]) for y in range(field.shape[1]) 
+                                if field[x, y] == 0 and 
+                                    not any(b[0] == (x,y) for b in bombs) and
+                                    manhattan_distance(position, (x,y)) <= MAX_BOMB_DISTANCE and 
+                                    not ((x == 1 or x == field.shape[0] - 2) and (y == 1 or y == field.shape[1] - 2))]
+                                    
+                # Score each position based on destroyable crates and distance
+                scored_positions = []
+                for bomb_pos in bomb_positions:
+                    field_tuple = tuple(tuple(row) for row in field)
+                    crates_destroyed = count_destroyable_crates(field_tuple, bomb_pos)
+                    distance = manhattan_distance(position, bomb_pos)
+                    score = crates_destroyed * 5 - distance * 2  # Prioritize crate destruction over distance
+                    scored_positions.append((score, bomb_pos))
+                
+                # Sort positions by score
+                scored_positions.sort(reverse=True)
+                
+                # Try to find a path to the best positions
+                for _, bomb_pos in scored_positions[:5]:  # Check the 5 best positions
+                    if manhattan_distance(position, bomb_pos) == 0:
+                        # We're already at the optimal position, point to the nearest crate
+                        for dx, dy in [(1,0), (-1,0), (0,1), (0,-1)]:
+                            nx, ny = bomb_pos[0] + dx, bomb_pos[1] + dy
+                            if 0 <= nx < field.shape[0] and 0 <= ny < field.shape[1] and field[nx, ny] == 1:
+                                return get_direction_from_path(position, (nx, ny)), 'reached_crate'
+                    else:
+                        path = a_star(field, position, bomb_pos, bombs, others, explosion_map)
+                        if path and len(path) > 1:
+                            return get_direction_from_path(position, path[1]), 'crate'
         
         # Priority 3: Highest scoring enemy or maximize distance
         if others:
@@ -499,6 +503,14 @@ def a_star(field, start, goal, bombs, others, explosion_map):
                ((next_x, next_y) == goal or not any(o[3] == (next_x, next_y) for o in others)):
                 neighbors.append((next_x, next_y))
         return neighbors
+    
+    def tie_breaking_heuristic(node, goal):
+        dx1 = node[0] - goal[0]
+        dy1 = node[1] - goal[1]
+        dx2 = start[0] - goal[0]
+        dy2 = start[1] - goal[1]
+        cross = abs(dx1 * dy2 - dx2 * dy1)
+        return cross * 0.001  # Small factor to break ties
 
     closed_set = set()
     open_set = [(0, start)]
@@ -525,16 +537,20 @@ def a_star(field, start, goal, bombs, others, explosion_map):
 
             tentative_g_score = g_score[current] + 1
 
-            if neighbor not in [i[1] for i in open_set]:
-                heapq.heappush(open_set, (f_score.get(neighbor, float('inf')), neighbor))
-            elif tentative_g_score >= g_score.get(neighbor, float('inf')):
-                continue
-
-            came_from[neighbor] = current
-            g_score[neighbor] = tentative_g_score
-            f_score[neighbor] = g_score[neighbor] + heuristic(neighbor, goal)
+            if neighbor not in g_score or tentative_g_score < g_score[neighbor]:
+                came_from[neighbor] = current
+                g_score[neighbor] = tentative_g_score
+                f_score = tentative_g_score + heuristic(neighbor, goal) + tie_breaking_heuristic(neighbor, goal)
+                if neighbor not in [i[1] for i in open_set]:
+                    heapq.heappush(open_set, (f_score, neighbor))
+                else:
+                    # Update position of the neighbor in the heap
+                    index = [i[1] for i in open_set].index(neighbor)
+                    open_set[index] = (f_score, neighbor)
+                    heapq.heapify(open_set)
 
     return None  # No path found
+    
     
 
 def a_star_to_safety(field, start, prioritized_safe_tiles, bombs, others, explosion_map):
@@ -554,11 +570,20 @@ def a_star_to_safety(field, start, prioritized_safe_tiles, bombs, others, explos
                 neighbors.append((next_x, next_y))
         return neighbors
 
+    def tie_breaking_heuristic(node, goal):
+        dx1 = node[0] - goal[0]
+        dy1 = node[1] - goal[1]
+        dx2 = start[0] - goal[0]
+        dy2 = start[1] - goal[1]
+        cross = abs(dx1 * dy2 - dx2 * dy1)
+        return cross * 0.001  # Small factor to break ties
+
     closed_set = set()
-    open_set = [(0, start)]
+    open_set = []
+    heapq.heappush(open_set, (0, start))
     came_from = {}
     g_score = {start: 0}
-    f_score = {start: heuristic(start, prioritized_safe_tiles[0])}  # Use the first (highest priority) safe tile
+    f_score = {start: heuristic(start, prioritized_safe_tiles[0])}
 
     while open_set:
         current = heapq.heappop(open_set)[1]
@@ -579,14 +604,17 @@ def a_star_to_safety(field, start, prioritized_safe_tiles, bombs, others, explos
 
             tentative_g_score = g_score[current] + 1
 
-            if neighbor not in [i[1] for i in open_set]:
-                heapq.heappush(open_set, (f_score.get(neighbor, float('inf')), neighbor))
-            elif tentative_g_score >= g_score.get(neighbor, float('inf')):
-                continue
-
-            came_from[neighbor] = current
-            g_score[neighbor] = tentative_g_score
-            f_score[neighbor] = g_score[neighbor] + heuristic(neighbor, prioritized_safe_tiles[0])
+            if neighbor not in g_score or tentative_g_score < g_score[neighbor]:
+                came_from[neighbor] = current
+                g_score[neighbor] = tentative_g_score
+                f_score = tentative_g_score + heuristic(neighbor, prioritized_safe_tiles[0]) + tie_breaking_heuristic(neighbor, prioritized_safe_tiles[0])
+                if neighbor not in [i[1] for i in open_set]:
+                    heapq.heappush(open_set, (f_score, neighbor))
+                else:
+                    # Update position of the neighbor in the heap
+                    index = [i[1] for i in open_set].index(neighbor)
+                    open_set[index] = (f_score, neighbor)
+                    heapq.heapify(open_set)
 
     return None  # No path found
 
@@ -656,7 +684,7 @@ def a_star_to_coin(field, start, goal, bombs, others):
     def get_neighbors(pos):
         x, y = pos
         neighbors = []
-        for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
+        for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]:  # Check all four directions
             next_x, next_y = x + dx, y + dy
             if is_valid(next_x, next_y) and field[next_x, next_y] != 1 and \
                not is_in_danger((next_x, next_y), bombs, field) and \
@@ -664,8 +692,17 @@ def a_star_to_coin(field, start, goal, bombs, others):
                 neighbors.append((next_x, next_y))
         return neighbors
 
+    def tie_breaking_heuristic(node, goal):
+        dx1 = node[0] - goal[0]
+        dy1 = node[1] - goal[1]
+        dx2 = start[0] - goal[0]
+        dy2 = start[1] - goal[1]
+        cross = abs(dx1 * dy2 - dx2 * dy1)
+        return cross * 0.001  # Small factor to break ties
+
     closed_set = set()
-    open_set = [(0, start)]
+    open_set = []
+    heapq.heappush(open_set, (0, start))
     came_from = {}
     g_score = {start: 0}
     f_score = {start: heuristic(start, goal)}
@@ -689,14 +726,17 @@ def a_star_to_coin(field, start, goal, bombs, others):
 
             tentative_g_score = g_score[current] + 1
 
-            if neighbor not in [i[1] for i in open_set]:
-                heapq.heappush(open_set, (f_score.get(neighbor, float('inf')), neighbor))
-            elif tentative_g_score >= g_score.get(neighbor, float('inf')):
-                continue
-
-            came_from[neighbor] = current
-            g_score[neighbor] = tentative_g_score
-            f_score[neighbor] = g_score[neighbor] + heuristic(neighbor, goal)
+            if neighbor not in g_score or tentative_g_score < g_score[neighbor]:
+                came_from[neighbor] = current
+                g_score[neighbor] = tentative_g_score
+                f_score = tentative_g_score + heuristic(neighbor, goal) + tie_breaking_heuristic(neighbor, goal)
+                if neighbor not in [i[1] for i in open_set]:
+                    heapq.heappush(open_set, (f_score, neighbor))
+                else:
+                    # Update position of the neighbor in the heap
+                    index = [i[1] for i in open_set].index(neighbor)
+                    open_set[index] = (f_score, neighbor)
+                    heapq.heapify(open_set)
 
     return None  # No path found
 
