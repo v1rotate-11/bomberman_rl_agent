@@ -1,2 +1,0 @@
-Added experience replay!
-A transition buffer is created at the beginning of the training. A probability variable is used to decide whether to store transitions from the agent's own transitions or the enemy transitions in the transitions buffer. The probability of sampling from the agent's own transitions increases linearly with the number of episode / total number of episodes. 

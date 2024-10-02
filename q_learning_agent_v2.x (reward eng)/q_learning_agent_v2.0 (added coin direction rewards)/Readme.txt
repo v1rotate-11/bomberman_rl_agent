@@ -1,1 +1,0 @@
-Added the complete information of the adjacent tiles and the agent's tile itself to the feature vector. 
